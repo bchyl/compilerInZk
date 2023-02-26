@@ -617,5 +617,93 @@ ret;
 ## high level program expr
 ## token && ast
 ## ir
+
+irGen transform from semaAST to irProgram
+
+note Function and Libfunc
+
+```
+pub struct Program {
+    /// Declarations for all the used types.
+    pub type_declarations: Vec<TypeDeclaration>,
+    /// Declarations for all the used library functions.
+    pub libfunc_declarations: Vec<LibfuncDeclaration>,
+    /// The code of the program.
+    pub statements: Vec<Statement>,
+    /// Descriptions of the functions - signatures and entry points.
+    pub funcs: Vec<Function>,
+}
+```
+
 ## asm
+
+asmCodeGen transform from irProgram(Program) to AsmProgram(CairoProgram)
+
+### asm struct: insts + hints
+
+```
+// asm program struct
+pub struct CairoProgram {
+    pub instructions: Vec<Instruction>,
+    ...
+}
+
+// inst: inst + hints
+pub struct Instruction {
+    pub body: InstructionBody,
+    pub inc_ap: bool,
+    pub hints: Vec<Hint>,
+}
+
+// inst ISA enum
+pub enum InstructionBody {
+    AddAp(AddApInstruction),
+    AssertEq(AssertEqInstruction),
+    Call(CallInstruction),
+    Jnz(JnzInstruction),
+    Jump(JumpInstruction),
+    Ret(RetInstruction),
+}
+
+// hints enum
+pub enum Hint {
+    AllocSegment {
+        dst: CellRef,
+    },
+    ...
+    SquareRoot {
+        value: ResOperand,
+        dst: CellRef,
+    },
+    ...
+}
+```
+
+### asm print
+- hints printAsm
+```
+impl Display for Hint {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Hint::AllocSegment { dst } => write!(f, "memory{dst} = segments.add()"),
+            Hint::SquareRoot { value, dst } => {
+                write!(f, "(memory{dst}) = sqrt({})", ResOperandFormatter(value))
+            }
+            ...
+        }
+    }
+}
+```
+- general printAsm
+
+InstructionBody fit to ISA
+
+### compile ir to asm
+
+for stmt case `Statement::Invocation` use `compile_invocation` to extend  `instructions`  vec.
+
+testcase `sierra_to_casm` flow: 
+
+`sierra_code -> ProgramParser -> compileIrToAsm -> CairoProgram`.
+
 ## trace
