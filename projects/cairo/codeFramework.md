@@ -707,3 +707,209 @@ testcase `sierra_to_casm` flow:
 `sierra_code -> ProgramParser -> compileIrToAsm -> CairoProgram`.
 
 ## trace
+
+vm running ir program
+
+Runner struct contains three parts: `ir`, `asm` and map for `register libFunc`
+
+```
+pub struct SierraCasmRunner {
+    /// The sierra program.
+    sierra_program: cairo_lang_sierra::program::Program,
+    /// Metadata for the Sierra program.
+    metadata: Metadata,
+    /// Program registry for the Sierra program.
+    sierra_program_registry: ProgramRegistry<CoreType, CoreLibfunc>,
+    /// The casm program matching the Sierra code.
+    casm_program: CairoProgram,
+}
+```
+
+## db to ir
+
+```
+let db = &mut RootDatabase::builder().detect_corelib().build()?;
+...
+let main_crate_ids = setup_project(db, Path::new(&args.path))?;
+...
+let sierra_program = db
+    .get_sierra_program(main_crate_ids)
+...
+```
+
+```
+pub fn get_sierra_program(
+    db: &dyn SierraGenGroup,
+    requested_crate_ids: Vec<CrateId>,
+) -> Maybe<Arc<cairo_lang_sierra::program::Program>>
+```
+
+## ir to asm
+
+instancing runner means that compile ir to casm with register-libFunc
+
+```
+    pub fn new(
+        sierra_program: cairo_lang_sierra::program::Program,
+        calc_gas: bool,
+    ) -> Result<Self, RunnerError> {
+        let metadata = create_metadata(&sierra_program, calc_gas)?;
+        let sierra_program_registry =
+            ProgramRegistry::<CoreType, CoreLibfunc>::new(&sierra_program)?;
+        let casm_program =
+            cairo_lang_sierra_to_casm::compiler::compile(&sierra_program, &metadata, calc_gas)?;
+        Ok(Self { sierra_program, metadata, sierra_program_registry, casm_program })
+    }
+```
+
+## run function 
+```
+let result = runner
+    .run_function("::main", &[], args.available_gas)
+    .with_context(|| "Failed to run the function.")?;
+
+    pub fn run_function(
+        &self,
+        name_suffix: &str,
+        args: &[Felt],
+        available_gas: Option<usize>,
+    ) -> Result<RunResult, RunnerError>
+```
+
+`find_function` -> `create_entry_code` for (entry,builtin) -> `create_code_footer` -> 
+    `run_function`on (instructions,builtins,additional_initialization,RunFunctionContext)
+```
+    pub fn run_function(
+        &self,
+        name_suffix: &str,
+        args: &[Felt],
+        available_gas: Option<usize>,
+    ) -> Result<RunResult, RunnerError> {
+        let func = self.find_function(name_suffix)?;
+        let initial_gas = self.get_initial_gas(func, available_gas)?;
+        let (entry_code, builtins) = self.create_entry_code(func, args, initial_gas)?;
+        let footer = self.create_code_footer();
+        let (cells, ap) = casm_run::run_function(
+            chain!(entry_code.iter(), self.casm_program.instructions.iter(), footer.iter()),
+            builtins,
+            |context| {
+                let vm = context.vm;
+                // Create the builtin cost segment, with dummy values.
+                let builtin_cost_segment = vm.add_memory_segment();
+                for token_type in CostTokenType::iter_precost() {
+                    vm.insert_value(
+                        &(builtin_cost_segment + (token_type.offset_in_builtin_costs() as usize)),
+                        Felt::from(DUMMY_BUILTIN_GAS_COST),
+                    )?;
+                }
+                // Put a pointer to the builtin cost segment at the end of the program (after the
+                // additional `ret` statement).
+                vm.insert_value(&(vm.get_pc() + context.data_len), builtin_cost_segment)?;
+                Ok(())
+            },
+        )?;
+    ...
+```
+### `run_function` on insts and hints
+```
+pub fn run_function<'a, Instructions: Iterator<Item = &'a Instruction> + Clone>(
+    instructions: Instructions,
+    builtins: Vec<String>,
+    additional_initialization: fn(
+        context: RunFunctionContext<'_>,
+    ) -> Result<(), Box<VirtualMachineError>>,
+) -> Result<(Vec<Option<Felt>>, usize), Box<VirtualMachineError>> 
+```
+
+1. `inst.assemble().encode())` 
+
+2. instance `iCairoHintProcessor`
+
+```
+let mut hint_processor = CairoHintProcessor::new(instructions);
+```
+
+3. fill cairoVM program and instance CairoRunner
+```
+pub struct Program {
+    pub builtins: Vec<String>,
+    pub prime: String,
+    pub data: Vec<MaybeRelocatable>,
+    pub constants: HashMap<String, Felt>,
+    pub main: Option<usize>,
+    //start and end labels will only be used in proof-mode
+    pub start: Option<usize>,
+    pub end: Option<usize>,
+    pub hints: HashMap<usize, Vec<HintParams>>,
+    pub reference_manager: ReferenceManager,
+    pub identifiers: HashMap<String, Identifier>,
+    pub error_message_attributes: Vec<Attribute>,
+    pub instruction_locations: Option<HashMap<usize, InstructionLocation>>,
+}
+
+    let mut runner = CairoRunner::new(&program, "all", false)
+        .map_err(VirtualMachineError::from)
+        .map_err(Box::new)?;
+```
+
+4. run program in cairo-vm
+```
+    let mut vm = VirtualMachine::new(true);
+
+    let end = runner.initialize(&mut vm).map_err(VirtualMachineError::from).map_err(Box::new)?;
+
+    additional_initialization(RunFunctionContext { vm: &mut vm, data_len })?;
+    
+    // hints two traits
+    runner.run_until_pc(end, &mut vm, &mut hint_processor)?;
+    runner.end_run(true, false, &mut vm, &mut hint_processor).map_err(Box::new)?;
+    runner.relocate(&mut vm).map_err(VirtualMachineError::from).map_err(Box::new)?;
+    Ok((runner.relocated_memory, runner.relocated_trace.unwrap().last().unwrap().ap))
+```
+
+- need impl `compile_hint` trait at `get_hint_data_dictionary` in `run_until_pc`
+
+- need impl `execute_hint` trait at `step_hint` of `vm.step` in `run_until_pc`
+
+#### compile_hint 
+
+string -> hints
+
+```
+    fn compile_hint(
+        &self,
+        hint_code: &str,
+        _ap_tracking_data: &ApTracking,
+        _reference_ids: &HashMap<String, usize>,
+        _references: &HashMap<usize, HintReference>,
+    ) -> Result<Box<dyn Any>, VirtualMachineError> {
+        Ok(Box::new(self.string_to_hint[hint_code].clone()))
+    }
+```
+
+#### execute_hint
+
+pattern match to interpretation hints enum
+
+take `SquareRoot` for example, it call rustlib `sqrt` to exec logic, and fill vm memory cell with the result.
+
+```
+   fn execute_hint(
+        &mut self,
+        vm: &mut VirtualMachine,
+        exec_scopes: &mut ExecutionScopes,
+        hint_data: &Box<dyn Any>,
+        _constants: &HashMap<String, Felt>,
+    ) -> Result<(), HintError> {
+        let hint = hint_data.downcast_ref::<Hint>().unwrap();
+        match hint {
+            ...
+             Hint::SquareRoot { value, dst } => {
+                let val = get_val(vm, value)?.to_biguint();
+                insert_value_to_cellref!(vm, dst, Felt::from(val.sqrt()))?;
+            }
+            ...
+        }
+        ...
+    }
+```
