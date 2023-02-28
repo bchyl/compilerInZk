@@ -635,6 +635,60 @@ pub struct Program {
 }
 ```
 
+### starkNet encoded ir
+`sierra_to_felts` convert `sierraProgram` to `ContractClass` serializedSierraProgram
+```
+    let mut sierra_program = db
+        .get_sierra_program_for_functions(
+            chain!(&external_functions, &constructor_functions).cloned().collect(),
+        )
+        .to_option()
+        .with_context(|| "Compilation failed without any diagnostics.")?;
+
+    if compiler_config.replace_ids {
+        sierra_program = Arc::new(replace_sierra_ids_in_program(db, &sierra_program));
+    }
+    let replacer = CanonicalReplacer::from_program(&sierra_program);
+    let sierra_program = replacer.apply(&sierra_program);
+
+    let entry_points_by_type = ContractEntryPoints {
+        external: get_entry_points(db, &external_functions, &replacer)?,
+        l1_handler: vec![],
+        /// TODO(orizi): Validate there is at most one constructor.
+        constructor: get_entry_points(db, &constructor_functions, &replacer)?,
+    };
+    let contract_class = ContractClass {
+        sierra_program: sierra_to_felts(
+            sierra_version::VersionId::current_version_id(),
+            &sierra_program,
+        )?,
+```
+
+```
+/// Represents a contract in the Starknet network.
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractClass {
+    pub sierra_program: Vec<BigIntAsHex>,
+    pub sierra_program_debug_info: Option<cairo_lang_sierra::debug_info::DebugInfo>,
+    pub contract_class_version: String,
+    pub entry_points_by_type: ContractEntryPoints,
+    pub abi: Option<Contract>,
+}
+```
+
+```
+// Serializes a Sierra program into a vector of felts.
+pub fn sierra_to_felts(
+    sierra_version: VersionId,
+    program: &Program,
+) -> Result<Vec<BigIntAsHex>, FeltSerdeError> {
+    let mut serialized = vec![];
+    sierra_version.serialize(&mut serialized)?;
+    program.serialize(&mut serialized)?;
+    Ok(serialized)
+}
+```
+
 ## asm
 
 asmCodeGen transform from irProgram(Program) to AsmProgram(CairoProgram)
