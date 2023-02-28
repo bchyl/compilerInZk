@@ -679,7 +679,7 @@ pub enum Hint {
 }
 ```
 
-### asm print
+### asm print(human readable)
 - hints printAsm
 ```
 impl Display for Hint {
@@ -697,6 +697,44 @@ impl Display for Hint {
 - general printAsm
 
 InstructionBody fit to ISA
+
+### asm(encoded)
+
+encoded serialize format
+```
+pub struct CasmContractClass {
+    #[serde(serialize_with = "serialize_big_uint", deserialize_with = "deserialize_big_uint")]
+    pub prime: BigUint,
+    pub compiler_version: String,
+    pub bytecode: Vec<BigIntAsHex>,
+    pub hints: Vec<(usize, Vec<String>)>,
+    pub entry_points_by_type: CasmContractEntryPoints,
+}
+```
+
+encoded insts+hints
+
+```
+        for instruction in cairo_program.instructions {
+            if !instruction.hints.is_empty() {
+                hints.push((
+                    bytecode.len(),
+                    instruction.hints.iter().map(|hint| hint.to_string()).collect(),
+                ))
+            }
+            bytecode.extend(instruction.assemble().encode().iter().map(|big_int| {
+                let (_q, reminder) = big_int.magnitude().div_rem(&prime);
+
+                BigIntAsHex {
+                    value: if big_int.is_negative() { &prime - reminder } else { reminder },
+                }
+            }))
+        }
+```
+
+case 
+see [hello_starknet.casm](https://github.com/starkware-libs/cairo/blob/main/crates/cairo-lang-starknet/test_data/hello_starknet.casm)
+### 
 
 ### compile ir to asm
 
