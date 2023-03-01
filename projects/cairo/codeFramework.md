@@ -669,7 +669,7 @@ pub struct Program {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContractClass {
     pub sierra_program: Vec<BigIntAsHex>,
-    pub sierra_program_debug_info: Option<cairo_lang_sierra::debug_info::DebugInfo>,
+V    pub sierra_program_debug_info: Option<cairo_lang_sierra::debug_info::DebugInfo>,
     pub contract_class_version: String,
     pub entry_points_by_type: ContractEntryPoints,
     pub abi: Option<Contract>,
@@ -1005,3 +1005,18 @@ take `SquareRoot` for example, it call rustlib `sqrt` to exec logic, and fill vm
         ...
     }
 ```
+
+### cairo-vm hint design
+
+see [Hint Processor](https://github.com/lambdaclass/cairo-rs/tree/main/docs/hint_processor)
+
+compile hint data content:
+- hint code string
+- ariable name map
+- variable references map
+- ap tracking
+
+execute hint content:
+- exec_scopes_proxy
+- vm_proxy
+- MemoryProxy
