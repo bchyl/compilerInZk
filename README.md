@@ -4,7 +4,7 @@ Compiler Architecture in ZKVM
 # Architecture flow
 
 ## Pipeline for Ola-lang
-![Ola-lang pipeline](ola-lang-intro.drawio.png)
+![Ola-lang pipeline](images/ola-lang-intro.drawio.png)
 
 ```mermaid
 graph TB
